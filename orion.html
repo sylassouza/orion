@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ÓRION Secure</title>
+
+<style>
+body{
+    margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto;
+    background:#121212;
+    color:#fff;
+}
+
+.wrapper{
+    max-width:1100px;
+    margin:auto;
+    padding:20px;
+}
+
+h2{
+    text-align:center;
+    margin-bottom:20px;
+    font-weight:500;
+}
+
+.grid{
+    display:grid;
+    grid-template-columns:1fr;
+    gap:20px;
+}
+
+.card{
+    background:#1e1e1e;
+    padding:20px;
+    border-radius:12px;
+    box-shadow:0 0 20px rgba(0,0,0,0.4);
+}
+
+input, textarea{
+    width:100%;
+    box-sizing:border-box;
+    padding:14px;
+    margin-top:12px;
+    border-radius:10px;
+    border:1px solid #333;
+    background:#2a2a2a;
+    color:#fff;
+    font-size:16px;
+}
+
+textarea{
+    resize:none;
+    min-height:160px;
+}
+
+button{
+    width:100%;
+    padding:14px;
+    margin-top:12px;
+    border:none;
+    border-radius:10px;
+    font-size:15px;
+    font-weight:bold;
+    cursor:pointer;
+}
+
+.primary{ background:#00c853; color:#000; }
+.secondary{ background:#2962ff; color:#fff; }
+.danger{ background:#c62828; color:#fff; }
+.warning{ background:#ff6f00; color:#000; }
+
+.row{
+    display:flex;
+    gap:10px;
+}
+
+.small{ flex:1; }
+
+.status{
+    text-align:center;
+    margin-top:10px;
+    font-size:13px;
+}
+
+.footer{
+    text-align:center;
+    font-size:12px;
+    opacity:0.6;
+    margin-top:20px;
+}
+
+/* ===== DESKTOP ===== */
+@media(min-width:900px){
+    .grid{
+        grid-template-columns:1fr 1fr;
+    }
+}
+</style>
+</head>
+
+<body>
+<div class="wrapper">
+
+<h2>ÓRION AES-256</h2>
+
+<div class="grid">
+
+<div class="card">
+
+<input type="password" id="password" placeholder="Chave criptográfica" oninput="savePassword()">
+
+<div class="row">
+<button class="secondary small" onclick="togglePassword()">Mostrar</button>
+<button class="warning small" onclick="deactivateKey()">Desativar</button>
+</div>
+
+<div class="status" id="statusText"></div>
+
+<textarea id="message" placeholder="Digite ou cole a mensagem"></textarea>
+
+<button class="primary" onclick="process()">ENCRIPTAR / DECRIPTAR</button>
+
+</div>
+
+<div class="card">
+
+<textarea id="result" placeholder="Resultado"></textarea>
+
+<div class="row">
+<button class="secondary small" onclick="copyResult()">Copiar</button>
+<button class="danger small" onclick="clearAll()">Limpar</button>
+</div>
+
+</div>
+
+</div>
+
+<div class="footer">
+AES-256-GCM • PBKDF2 • Offline • Sessão temporária
+</div>
+
+</div>
+
+<script>
+
+// ============================
+// SESSÃO
+// ============================
+
+function updateStatus(){
+    const saved=sessionStorage.getItem("orion_key");
+    const status=document.getElementById("statusText");
+
+    if(saved){
+        status.textContent="Chave ativa na sessão";
+        status.style.color="#00e676";
+    }else{
+        status.textContent="Nenhuma chave ativa";
+        status.style.color="#ff5252";
+    }
+}
+
+function savePassword(){
+    const pass=document.getElementById("password").value;
+    if(pass){
+        sessionStorage.setItem("orion_key",pass);
+    }else{
+        sessionStorage.removeItem("orion_key");
+    }
+    updateStatus();
+}
+
+function deactivateKey(){
+    sessionStorage.removeItem("orion_key");
+    document.getElementById("password").value="";
+    document.getElementById("message").value="";
+    document.getElementById("result").value="";
+    updateStatus();
+    alert("Chave desativada.");
+}
+
+window.onload=function(){
+    const saved=sessionStorage.getItem("orion_key");
+    if(saved){
+        document.getElementById("password").value=saved;
+    }
+    updateStatus();
+}
+
+// ============================
+// CRIPTOGRAFIA
+// ============================
+
+async function deriveKey(password,salt){
+    const enc=new TextEncoder();
+    const keyMaterial=await crypto.subtle.importKey(
+        "raw",
+        enc.encode(password),
+        "PBKDF2",
+        false,
+        ["deriveKey"]
+    );
+
+    return crypto.subtle.deriveKey(
+        {
+            name:"PBKDF2",
+            salt:salt,
+            iterations:100000,
+            hash:"SHA-256"
+        },
+        keyMaterial,
+        {name:"AES-GCM",length:256},
+        false,
+        ["encrypt","decrypt"]
+    );
+}
+
+function bufferToBase64(buffer){
+    return btoa(String.fromCharCode(...new Uint8Array(buffer)));
+}
+
+function base64ToBuffer(base64){
+    const binary=atob(base64);
+    const bytes=new Uint8Array(binary.length);
+    for(let i=0;i<binary.length;i++){
+        bytes[i]=binary.charCodeAt(i);
+    }
+    return bytes;
+}
+
+async function process(){
+    const password=sessionStorage.getItem("orion_key");
+    const message=document.getElementById("message").value.trim();
+    const resultBox=document.getElementById("result");
+
+    if(!password){
+        alert("Nenhuma chave ativa.");
+        return;
+    }
+
+    if(!message){
+        alert("Digite uma mensagem.");
+        return;
+    }
+
+    const cleaned=message.replace(/\s/g,'');
+
+    try{
+        if(cleaned.length>40){
+            const data=base64ToBuffer(cleaned);
+
+            if(data.length>28){
+                const salt=data.slice(0,16);
+                const iv=data.slice(16,28);
+                const encrypted=data.slice(28);
+
+                const key=await deriveKey(password,salt);
+
+                const decrypted=await crypto.subtle.decrypt(
+                    {name:"AES-GCM",iv:iv},
+                    key,
+                    encrypted
+                );
+
+                resultBox.value=new TextDecoder().decode(decrypted);
+                return;
+            }
+        }
+    }catch(e){}
+
+    const enc=new TextEncoder();
+    const salt=crypto.getRandomValues(new Uint8Array(16));
+    const iv=crypto.getRandomValues(new Uint8Array(12));
+    const key=await deriveKey(password,salt);
+
+    const encrypted=await crypto.subtle.encrypt(
+        {name:"AES-GCM",iv:iv},
+        key,
+        enc.encode(message)
+    );
+
+    const combined=new Uint8Array(
+        salt.length+iv.length+encrypted.byteLength
+    );
+
+    combined.set(salt,0);
+    combined.set(iv,salt.length);
+    combined.set(new Uint8Array(encrypted),salt.length+iv.length);
+
+    resultBox.value=bufferToBase64(combined);
+}
+
+// ============================
+// UTILITÁRIOS
+// ============================
+
+function copyResult(){
+    const result=document.getElementById("result");
+    result.select();
+    document.execCommand("copy");
+    alert("Copiado.");
+}
+
+function clearAll(){
+    document.getElementById("message").value="";
+    document.getElementById("result").value="";
+}
+
+function togglePassword(){
+    const field=document.getElementById("password");
+    field.type=field.type==="password"?"text":"password";
+}
+
+</script>
+
+</body>
+</html>
